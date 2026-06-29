@@ -223,9 +223,7 @@ def _song_to_item(song, base_url, token=''):
         'is_playable': True,
         'icon': cover_url or None,
         'thumbnail': cover_url or None,
-        'fanart': cover_url or None,
         'info': {
-            'mediatype': 'music',
             'title': title,
             'artist': artist,
             'album': album,
@@ -416,7 +414,6 @@ def playlists(offset):
             'info': {
                 'plot': plot,
             },
-            'info_type': 'video',
         })
 
     if offset + len(pl_list) < total:
@@ -580,7 +577,49 @@ def play_song(song_id):
         pass
 
     play_url = _build_url_with_token(play_url, base_url, token)
-    plugin.set_resolved_url(play_url)
+
+    # 构建带封面的 ListItem，确保播放时 Kodi 能显示专辑封面
+    title = song.get('title') or ''
+    artist = song.get('artist') or ''
+    album = song.get('album') or ''
+    cover_url = song.get('cover_url') or ''
+    cover_url = _build_url_with_token(cover_url, base_url, token)
+    duration_raw = song.get('duration', 0)
+    try:
+        duration_secs = int(float(duration_raw))
+    except (TypeError, ValueError):
+        duration_secs = 0
+
+    # 通过 xbmcswift2 框架的 set_resolved_url 保证框架状态正确
+    # 框架会正确设置 _end_of_directory 标志，避免 handle 被二次调用导致播放失败
+    play_item = {
+        'label': title,
+        'path': play_url,
+        'info_type': 'music',
+        'info': {
+            'title': title,
+            'artist': artist,
+            'album': album,
+            'duration': duration_secs,
+        },
+    }
+    if cover_url:
+        # thumbnail/icon 供旧版 Kodi 使用
+        play_item['thumbnail'] = cover_url
+        play_item['icon'] = cover_url
+
+    resolved = plugin.set_resolved_url(play_item)
+
+    # 新版 Kodi (v19+) 已废弃 setThumbnailImage，需额外调用 setArt 设置封面
+    if cover_url and resolved:
+        try:
+            resolved[0].as_xbmc_listitem().setArt({
+                'thumb': cover_url,
+                'icon': cover_url,
+                'fanart': cover_url,
+            })
+        except Exception:
+            pass
 
 
 if __name__ == '__main__':

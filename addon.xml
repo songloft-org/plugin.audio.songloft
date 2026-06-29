@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="plugin.audio.songloft" name="Songloft" version="1.0.0" provider-name="altman08">
+<addon id="plugin.audio.songloft" name="Songloft" version="1.0.1" provider-name="altman08">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="script.module.xbmcswift2" version="2.4.0"/>
@@ -18,6 +18,7 @@
     <summary lang="zh_CN">Songloft 自托管音乐播放器</summary>
     <description lang="zh_CN">通过 Kodi 播放 Songloft 自托管音乐服务器上的音乐。支持歌曲库浏览、歌单播放、搜索等功能。</description>
     <news>
+      v1.0.1 - 修复播放时专辑封面不显示的问题
       v1.0.0 - 初始版本：歌曲库浏览、歌单播放、搜索
     </news>
   </extension>
