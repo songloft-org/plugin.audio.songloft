@@ -195,6 +195,58 @@ def _build_url_with_token(url, base_url, token):
     return url
 
 
+def _fetch_all_songs(api, base_url, token, playlist_id=None, batch=200):
+    """分批拉取全部歌曲，返回 xbmcgui.ListItem 列表（已附带元数据和封面）。
+    playlist_id 不为 None 时拉取歌单内歌曲，否则拉取歌曲库。
+    """
+    all_items = []
+    offset = 0
+    while True:
+        try:
+            if playlist_id is not None:
+                resp = api.get_playlist_songs(playlist_id, limit=batch, offset=offset)
+            else:
+                resp = api.get_songs(limit=batch, offset=offset)
+        except SongloftException:
+            break
+        songs = resp.get('songs', [])
+        total = resp.get('total', 0)
+        for song in songs:
+            title = song.get('title') or '未知歌曲'
+            artist = song.get('artist') or ''
+            album = song.get('album') or ''
+            duration_raw = song.get('duration', 0)
+            try:
+                duration_secs = int(float(duration_raw))
+            except (TypeError, ValueError):
+                duration_secs = 0
+            cover_url = _build_url_with_token(song.get('cover_url') or '', base_url, token)
+            play_url = _build_url_with_token(song.get('url') or '', base_url, token)
+            if not play_url:
+                continue
+            li = xbmcgui.ListItem(label=title, path=play_url)
+            li.setArt({'thumb': cover_url, 'icon': cover_url}) if cover_url else None
+            try:
+                tag = li.getMusicInfoTag()
+                tag.setTitle(title)
+                if artist:
+                    tag.setArtist(artist)
+                if album:
+                    tag.setAlbum(album)
+                if duration_secs:
+                    tag.setDuration(duration_secs)
+            except AttributeError:
+                li.setInfo('music', {
+                    'title': title, 'artist': artist,
+                    'album': album, 'duration': duration_secs,
+                })
+            all_items.append((play_url, li))
+        offset += len(songs)
+        if offset >= total or not songs:
+            break
+    return all_items
+
+
 def _song_to_item(song, base_url, token=''):
     """将 Songloft 歌曲 dict 转换为 xbmcswift2 item dict"""
     title = song.get('title') or '未知歌曲'
@@ -355,6 +407,13 @@ def library(offset):
     total = resp.get('total', 0)
     items = [_song_to_item(s, base_url, token) for s in songs]
 
+    # 顶部加入"播放全部"入口（仅第一页显示，避免重复）
+    if offset == 0 and total > 0:
+        items.insert(0, {
+            'label': '[COLOR green]▶ 播放全部 ({} 首)[/COLOR]'.format(total),
+            'path': plugin.url_for('play_all_library'),
+        })
+
     if offset + len(songs) < total:
         items.append({
             'label': '[COLOR yellow]下一页 ({}/{})…[/COLOR]'.format(offset + len(songs), total),
@@ -451,6 +510,13 @@ def playlist_songs(playlist_id, offset):
     total = resp.get('total', 0)
     items = [_song_to_item(s, base_url, token) for s in songs]
 
+    # 顶部加入"播放全部"入口（仅第一页显示，避免重复）
+    if offset == 0 and total > 0:
+        items.insert(0, {
+            'label': '[COLOR green]▶ 播放全部 ({} 首)[/COLOR]'.format(total),
+            'path': plugin.url_for('play_all_playlist', playlist_id=str(playlist_id)),
+        })
+
     if offset + len(songs) < total:
         items.append({
             'label': '[COLOR yellow]下一页 ({}/{})…[/COLOR]'.format(offset + len(songs), total),
@@ -537,6 +603,49 @@ def search_results(keyword, offset):
         })
 
     return items
+
+
+# ------------------------------------------------------------------ #
+# 播放全部（跨分页）
+# ------------------------------------------------------------------ #
+
+def _play_all(api, base_url, token, playlist_id=None, label='歌曲库'):
+    """拉取全部歌曲并加入 Kodi 音乐播放列表后开始播放"""
+    _notify('加载中', '正在加载全部歌曲，请稍候…')
+    items = _fetch_all_songs(api, base_url, token, playlist_id=playlist_id)
+    if not items:
+        _notify_error('播放全部', '未能加载到任何歌曲')
+        return
+
+    playlist = xbmc.PlayList(xbmc.PLAYLIST_MUSIC)
+    playlist.clear()
+    for play_url, li in items:
+        playlist.add(play_url, li)
+
+    xbmc.Player().play(playlist)
+    _notify('播放全部', '{} 首歌曲已加入播放列表'.format(len(items)))
+
+
+@plugin.route('/play_all/library/')
+def play_all_library():
+    """播放整个歌曲库（跨分页拉取全部）"""
+    if not _ensure_logged_in():
+        return
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    _play_all(api, base_url, token, playlist_id=None, label='歌曲库')
+
+
+@plugin.route('/play_all/playlist/<playlist_id>/')
+def play_all_playlist(playlist_id):
+    """播放整个歌单（跨分页拉取全部）"""
+    if not _ensure_logged_in():
+        return
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    _play_all(api, base_url, token, playlist_id=playlist_id, label='歌单')
 
 
 # ------------------------------------------------------------------ #
