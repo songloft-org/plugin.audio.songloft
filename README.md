@@ -12,6 +12,10 @@ Kodi 插件，用于播放 [Songloft](https://github.com/altman08/songloft-playe
 - JWT 登录鉴权（access_token 自动携带）
 - **多服务器支持**：最多配置 5 个服务器，主菜单一键切换
 
+## 已知限制
+
+- **不支持 Songloft JS 插件**：Songloft 的 JS 插件系统（jsplugin）本质上是运行在 WebView/浏览器中的前端网页应用，Kodi 没有内置浏览器，也无法在插件环境中执行 JavaScript，因此无法渲染或交互。此 Kodi 插件仅对接 Songloft 后端的原生 REST API（歌曲库、歌单、搜索、播放），不支持通过 JS 插件扩展的内容来源。
+
 ## 安装
 
 ### 方式一：从 Release 下载（推荐）
