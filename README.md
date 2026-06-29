@@ -27,12 +27,7 @@ Kodi 插件，用于播放 [Songloft](https://github.com/altman08/songloft-playe
 ### 方式二：手动打包
 
 ```bash
-cd ..
-zip -r plugin.audio.songloft.zip plugin.audio.songloft/ \
-  --exclude "plugin.audio.songloft/.git/*" \
-  --exclude "plugin.audio.songloft/*.zip" \
-  --exclude "plugin.audio.songloft/screenshot/*" \
-  --exclude "plugin.audio.songloft/README.md"
+bash build.sh
 ```
 
 ## 配置

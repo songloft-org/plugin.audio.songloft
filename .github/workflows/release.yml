@@ -25,16 +25,9 @@ jobs:
 
       - name: Build zip
         run: |
+          bash build.sh
           ADDON_ID="plugin.audio.songloft"
           ZIP_NAME="${ADDON_ID}-${{ steps.version.outputs.version }}.zip"
-          cd ..
-          zip -r "$ZIP_NAME" "$ADDON_ID/" \
-            --exclude "$ADDON_ID/.git/*" \
-            --exclude "$ADDON_ID/.github/*" \
-            --exclude "$ADDON_ID/*.zip" \
-            --exclude "$ADDON_ID/screenshot/*" \
-            --exclude "$ADDON_ID/README.md"
-          mv "$ZIP_NAME" "$ADDON_ID/"
           echo "ZIP_NAME=$ZIP_NAME" >> $GITHUB_ENV
 
       - name: Extract changelog from addon.xml
