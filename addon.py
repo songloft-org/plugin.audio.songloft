@@ -45,12 +45,7 @@ def _get_setting(key):
 
 
 def _get_page_size():
-    _page_size_options = [20, 50, 100, 200]
-    try:
-        idx = int(_get_setting('page_size') or '1')
-        return _page_size_options[idx]
-    except (ValueError, IndexError):
-        return 50
+    return 50
 
 
 def _get_server_config(idx):
