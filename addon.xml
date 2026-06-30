@@ -1,5 +1,5 @@
 <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<addon id="plugin.audio.songloft" name="Songloft" version="1.0.5" provider-name="altman08">
+<addon id="plugin.audio.songloft" name="Songloft" version="1.0.6" provider-name="altman08">
   <requires>
     <import addon="xbmc.python" version="3.0.0"/>
     <import addon="script.module.xbmcswift2" version="2.4.0"/>
@@ -17,6 +17,7 @@
     <summary lang="zh_CN">Songloft 自托管音乐播放器</summary>
     <description lang="zh_CN">通过 Kodi 播放 Songloft 自托管音乐服务器上的音乐。支持歌曲库浏览、歌单播放、搜索等功能。</description>
     <news>
+      v1.0.6 - 「添加到歌单」菜单支持展示内置歌单（如「收藏」），以 ★ 前缀区分；排除自动生成目录歌单
       v1.0.5 - 新增歌单管理：新建/重命名/删除歌单，歌曲添加到歌单/从歌单移除；修复 RunPlugin 进程中无法读取服务器设置的问题
       v1.0.4 - 恢复分页设置并修正分页参数读取逻辑
       v1.0.3 - 修复设置页出现音频解码器等无关配置项的问题

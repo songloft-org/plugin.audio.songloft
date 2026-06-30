@@ -753,17 +753,23 @@ def song_add_to_playlist(song_id):
         return
 
     pl_list = resp.get('playlists', [])
-    # 过滤掉内置/自动创建歌单
+    # 过滤掉自动按目录生成的歌单（auto_created），保留内置歌单（如「收藏」）
     pl_list = [p for p in pl_list
-               if 'built_in' not in (p.get('labels') or [])
-               and 'auto_created' not in (p.get('labels') or [])]
+               if 'auto_created' not in (p.get('labels') or [])]
 
     if not pl_list:
         _notify('添加到歌单', '暂无可用歌单，请先新建歌单')
         return
 
-    labels = ['{} ({}首)'.format(p.get('name') or '未命名', p.get('song_count', 0))
-              for p in pl_list]
+    # built_in 歌单（如「收藏」）加星号前缀方便区分
+    def _pl_label(p):
+        name = p.get('name') or '未命名'
+        count = p.get('song_count', 0)
+        if 'built_in' in (p.get('labels') or []):
+            return '★ {} ({}首)'.format(name, count)
+        return '{} ({}首)'.format(name, count)
+
+    labels = [_pl_label(p) for p in pl_list]
 
     dialog = xbmcgui.Dialog()
     sel = dialog.select('选择歌单', labels)
