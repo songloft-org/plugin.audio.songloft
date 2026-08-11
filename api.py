@@ -146,9 +146,18 @@ class SongloftApi(object):
     # 歌曲
     # ------------------------------------------------------------------ #
 
-    def get_songs(self, limit=50, offset=0, keyword=None, song_type=None):
+    def get_songs(self, limit=50, offset=0, keyword=None, song_type=None,
+                  genre=None, artist=None, album=None, year=None):
         """
         获取歌曲列表
+        :param genre: 按流派精确过滤（可选）。注意：后端对空字符串等同于「不过滤」
+                       （filter.Genre != "" 才生效），并不支持「只查该字段为空的歌曲」。
+                       本方法仍用 is not None 区分「不传」与「传空串」，仅为语义清晰，
+                       调用方无需依赖空串能过滤出未知分类——facets 接口本就不会返回
+                       空值取值（后端 facetBaseCond 已排除），正常调用链路不会传空串
+        :param artist: 按歌手过滤（可选），同上
+        :param album: 按专辑过滤（可选），同上
+        :param year: 按发行年份过滤（可选），同上
         :return: {'songs': [...], 'total': int}
         """
         params = {'limit': limit, 'offset': offset}
@@ -156,11 +165,38 @@ class SongloftApi(object):
             params['keyword'] = keyword
         if song_type:
             params['type'] = song_type
+        if genre is not None:
+            params['genre'] = genre
+        if artist is not None:
+            params['artist'] = artist
+        if album is not None:
+            params['album'] = album
+        if year is not None:
+            params['year'] = year
         return self._get('/songs', params=params)
 
     def get_song(self, song_id):
         """获取单首歌曲详情"""
         return self._get('/songs/{}'.format(song_id))
+
+    def get_facets(self, field, keyword=None, limit=200, offset=0, sort=None, order=None):
+        """
+        获取标签分类聚合清单（歌手/专辑/流派/年份等维度的取值列表）
+        GET /api/v1/songs/facets
+        :param field: 维度字段，取值 genre/artist/album/year（本插件仅用到这几个）
+        :param keyword: 服务端关键词搜索（可选，按取值名称过滤）
+        :param sort: 排序字段，count（按歌曲数）或 name（按名称），可选
+        :param order: 排序方向 asc/desc，可选
+        :return: {'facets': [{'value': str, 'count': int, 'cover_url': str}, ...], 'total': int}
+        """
+        params = {'field': field, 'limit': limit, 'offset': offset}
+        if keyword:
+            params['keyword'] = keyword
+        if sort:
+            params['sort'] = sort
+        if order:
+            params['order'] = order
+        return self._get('/songs/facets', params=params)
 
     def notify_played(self, song_id, play_type='finish'):
         """通知后端歌曲播放事件"""

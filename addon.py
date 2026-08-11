@@ -12,6 +12,12 @@ from api import SongloftApi, SongloftException
 
 plugin = Plugin()
 
+# Python 2/3 兼容：Python 2 下字符串可能是 str 或 unicode，Python 3 只有 str
+try:
+    _string_types = (str, unicode)  # noqa: F821  (Python 2)
+except NameError:
+    _string_types = (str,)  # Python 3
+
 # ------------------------------------------------------------------ #
 # 存储
 # ------------------------------------------------------------------ #
@@ -196,9 +202,11 @@ def _build_url_with_token(url, base_url, token):
     return url
 
 
-def _fetch_all_songs(api, base_url, token, playlist_id=None, batch=200):
+def _fetch_all_songs(api, base_url, token, playlist_id=None, batch=200, song_filter=None):
     """分批拉取全部歌曲，返回 xbmcgui.ListItem 列表（已附带元数据和封面）。
-    playlist_id 不为 None 时拉取歌单内歌曲，否则拉取歌曲库。
+    playlist_id 不为 None 时拉取歌单内歌曲；
+    song_filter 不为 None 时按其过滤条件拉取歌曲库（用于分类「播放全部」）；
+    两者都为 None 时拉取整个歌曲库。
     """
     all_items = []
     offset = 0
@@ -207,7 +215,7 @@ def _fetch_all_songs(api, base_url, token, playlist_id=None, batch=200):
             if playlist_id is not None:
                 resp = api.get_playlist_songs(playlist_id, limit=batch, offset=offset)
             else:
-                resp = api.get_songs(limit=batch, offset=offset)
+                resp = api.get_songs(limit=batch, offset=offset, **(song_filter or {}))
         except SongloftException:
             break
         songs = resp.get('songs', [])
@@ -248,10 +256,14 @@ def _fetch_all_songs(api, base_url, token, playlist_id=None, batch=200):
     return all_items
 
 
-def _song_to_item(song, base_url, token='', playlist_id=None):
+def _song_to_item(song, base_url, token='', playlist_id=None, show_artist_prefix=True):
     """将 Songloft 歌曲 dict 转换为 xbmcswift2 item dict。
     playlist_id 不为 None 时，上下文菜单附加「从歌单移除」和「添加到歌单」；
     否则只附加「添加到歌单」。
+    show_artist_prefix 为 False 时，label 只显示歌名、不再拼歌手前缀
+    （专辑详情页用：同一专辑内歌手基本相同，重复展示无信息量，对齐官方
+    客户端 Flutter 版专辑页「标题只放歌名，歌手放副标题/单独一列」的做法）。
+    无论是否展示前缀，歌手都会写入 label2，供支持详情列表视图的 Kodi 皮肤展示。
     """
     title = song.get('title') or '未知歌曲'
     artist = song.get('artist') or ''
@@ -262,7 +274,7 @@ def _song_to_item(song, base_url, token='', playlist_id=None):
     except (TypeError, ValueError):
         duration_secs = 0
 
-    if artist:
+    if artist and show_artist_prefix:
         label = '{} - {}'.format(artist, title)
     else:
         label = title
@@ -290,6 +302,7 @@ def _song_to_item(song, base_url, token='', playlist_id=None):
 
     return {
         'label': label,
+        'label2': artist or None,
         'path': item_path,
         'is_playable': True,
         'icon': cover_url or None,
@@ -306,6 +319,76 @@ def _song_to_item(song, base_url, token='', playlist_id=None):
         },
         'context_menu': context_menu,
         'replace_context_menu': False,
+    }
+
+
+# ------------------------------------------------------------------ #
+# 辅助：分类浏览（歌手/专辑/流派/年份）
+# ------------------------------------------------------------------ #
+
+# 分类维度字段 -> 中文标签
+_FACET_FIELD_LABELS = {
+    'artist': '歌手',
+    'album': '专辑',
+    'genre': '流派',
+    'year': '年份',
+}
+
+
+def _facet_field_label(field):
+    return _FACET_FIELD_LABELS.get(field, field)
+
+
+def _facet_value_label(field, value):
+    """取值展示文案：空值显示为「未知」，年份加「年」后缀。"""
+    if not value:
+        return '未知{}'.format(_facet_field_label(field))
+    if field == 'year':
+        return '{} 年'.format(value)
+    return value
+
+
+# xbmcswift2 的路由正则要求路径段至少匹配一个非 '/' 字符（见 UrlRule 实现），
+# 空字符串取值（如「未知专辑」）无法作为路径参数原样传递，用此哨兵值代替，
+# 读取时再还原回空字符串。分类取值本身极不可能与该字符串冲突。
+_FACET_EMPTY_SENTINEL = '__songloft_empty__'
+
+
+def _facet_value_to_path(value):
+    """把 facet 取值转成可放进 URL 路径段的字符串。
+    xbmcswift2 的 url_for 会自动做 quote_plus 编码，调用方无需手动转义；
+    这里只需处理空字符串这一特殊情况，并确保类型为字符串（year 取值可能是 int）。
+    """
+    value = '' if value is None else value
+    value = value if isinstance(value, _string_types) else str(value)
+    return value if value else _FACET_EMPTY_SENTINEL
+
+
+def _facet_value_from_path(value):
+    """还原 _facet_value_to_path 编码过的取值（xbmcswift2 已自动 unquote_plus）。"""
+    return '' if value == _FACET_EMPTY_SENTINEL else value
+
+
+def _facet_to_item(field, facet, base_url, token):
+    """把单个 facet（{value, count, cover_url}）转换为分类取值列表项。
+    artist 维度下钻到「该歌手的专辑列表」，其余维度直接下钻到「该取值下的歌曲列表」。
+    """
+    value = facet.get('value') or ''
+    count = facet.get('count', 0)
+    cover_url = _build_url_with_token(facet.get('cover_url') or '', base_url, token)
+    label = '{} [COLOR gray]({}首)[/COLOR]'.format(_facet_value_label(field, value), count)
+    path_value = _facet_value_to_path(value)
+
+    if field == 'artist':
+        path = plugin.url_for('artist_albums', artist=path_value, offset='0')
+    else:
+        path = plugin.url_for('facet_songs', field=field, value=path_value, offset='0')
+
+    return {
+        'label': label,
+        'path': path,
+        'icon': cover_url or None,
+        'thumbnail': cover_url or None,
     }
 
 
@@ -327,6 +410,22 @@ def index():
         {
             'label': '歌曲库',
             'path': plugin.url_for('library', offset='0'),
+        },
+        {
+            'label': '歌手',
+            'path': plugin.url_for('facet_list', field='artist', offset='0'),
+        },
+        {
+            'label': '专辑',
+            'path': plugin.url_for('facet_list', field='album', offset='0'),
+        },
+        {
+            'label': '流派',
+            'path': plugin.url_for('facet_list', field='genre', offset='0'),
+        },
+        {
+            'label': '年份',
+            'path': plugin.url_for('facet_list', field='year', offset='0'),
         },
         {
             'label': '我的歌单',
@@ -719,6 +818,257 @@ def search_results(keyword, offset):
 
 
 # ------------------------------------------------------------------ #
+# 分类浏览：歌手 / 专辑 / 流派 / 年份
+# ------------------------------------------------------------------ #
+#
+# 导航结构：
+#   歌手 -> 歌手列表(facet)      -> 该歌手的专辑列表(本地按 album 二次聚合) -> 该专辑歌曲
+#   专辑 -> 专辑列表(facet)      -> 该专辑歌曲
+#   流派 -> 流派列表(facet)      -> 该流派歌曲
+#   年份 -> 年份列表(facet)      -> 该年份歌曲
+# ------------------------------------------------------------------ #
+
+_FACET_PAGE_SIZE = 100
+
+# 歌手->专辑聚合结果的进程内缓存：{(server_idx, artist): (albums, total_songs)}
+# 避免同一次浏览（如翻页）重复拉取该歌手全部歌曲。Kodi 每次目录跳转通常是新进程，
+# 缓存主要在同一进程内的连续调用（如同一歌手内翻页）中生效，跨进程不保证命中，
+# 不设过期时间，靠重进插件/切换服务器自然失效。
+_artist_albums_cache = {}
+
+
+@plugin.route('/facets/<field>/<offset>/')
+def facet_list(field, offset):
+    """分类维度取值列表（歌手/专辑/流派/年份），按歌曲数降序分页展示"""
+    if not _ensure_logged_in():
+        return []
+
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    offset = int(offset)
+
+    try:
+        resp = api.get_facets(field, limit=_FACET_PAGE_SIZE, offset=offset, sort='count', order='desc')
+    except SongloftException as e:
+        _notify_error('加载失败', e.message)
+        return []
+
+    facets = resp.get('facets', [])
+    total = resp.get('total', 0)
+    items = [_facet_to_item(field, f, base_url, token) for f in facets]
+
+    if offset + len(facets) < total:
+        items.append({
+            'label': '[COLOR yellow]下一页 ({}/{})…[/COLOR]'.format(offset + len(facets), total),
+            'path': plugin.url_for('facet_list', field=field, offset=str(offset + _FACET_PAGE_SIZE)),
+        })
+
+    return items
+
+
+@plugin.route('/facets/<field>/<value>/songs/<offset>/')
+def facet_songs(field, value, offset):
+    """某分类取值下的歌曲列表（流派/专辑/年份 -> 歌曲，扁平展示）"""
+    if not _ensure_logged_in():
+        return []
+
+    decoded_value = _facet_value_from_path(value)
+    api = _make_api()
+    page_size = _get_page_size()
+    offset = int(offset)
+    base_url = _get_base_url()
+    token = _get_active_token()
+
+    song_filter = {field: decoded_value}
+    try:
+        resp = api.get_songs(limit=page_size, offset=offset, **song_filter)
+    except SongloftException as e:
+        _notify_error('加载失败', e.message)
+        return []
+
+    songs = resp.get('songs', [])
+    total = resp.get('total', 0)
+    # album 维度下同一专辑内歌手基本一致，标题不再重复拼歌手前缀；
+    # genre/year 维度下歌曲可能来自不同歌手，仍需展示前缀区分。
+    items = [_song_to_item(s, base_url, token, show_artist_prefix=(field != 'album'))
+             for s in songs]
+
+    if offset == 0 and total > 0:
+        items.insert(0, {
+            'label': '[COLOR green]▶ 播放全部 ({} 首)[/COLOR]'.format(total),
+            'path': plugin.url_for('play_all_facet', field=field, value=value),
+        })
+
+    if offset + len(songs) < total:
+        items.append({
+            'label': '[COLOR yellow]下一页 ({}/{})…[/COLOR]'.format(offset + len(songs), total),
+            'path': plugin.url_for('facet_songs', field=field, value=value, offset=str(offset + page_size)),
+        })
+
+    return items
+
+
+@plugin.route('/artists/<artist>/albums/<offset>/')
+def artist_albums(artist, offset):
+    """某歌手的专辑列表：本地对该歌手的全部歌曲按专辑分组聚合（后端 facets 不支持
+    二次分组，故先拉取该歌手全部歌曲，再按 album 字段本地聚合、按歌曲数降序展示）。
+    """
+    if not _ensure_logged_in():
+        return []
+
+    decoded_artist = _facet_value_from_path(artist)
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    offset = int(offset)
+
+    cache_key = (_active_idx(), decoded_artist)
+    cached = _artist_albums_cache.get(cache_key)
+    if cached is not None:
+        albums, total_songs = cached
+    else:
+        try:
+            albums, total_songs = _aggregate_artist_albums(api, decoded_artist)
+        except SongloftException as e:
+            _notify_error('加载失败', e.message)
+            return []
+        _artist_albums_cache[cache_key] = (albums, total_songs)
+
+    items = []
+    if offset == 0 and total_songs > 0:
+        items.append({
+            'label': '[COLOR green]▶ 播放全部 ({} 首)[/COLOR]'.format(total_songs),
+            'path': plugin.url_for('play_all_facet', field='artist', value=artist),
+        })
+
+    page = albums[offset:offset + _FACET_PAGE_SIZE]
+    for album_name, count, cover_url in page:
+        label = '{} [COLOR gray]({}首)[/COLOR]'.format(
+            album_name or '未知专辑', count)
+        items.append({
+            'label': label,
+            'path': plugin.url_for(
+                'artist_album_songs',
+                artist=artist,
+                album=_facet_value_to_path(album_name),
+                offset='0',
+            ),
+            'icon': _build_url_with_token(cover_url, base_url, token) or None,
+            'thumbnail': _build_url_with_token(cover_url, base_url, token) or None,
+        })
+
+    if offset + _FACET_PAGE_SIZE < len(albums):
+        items.append({
+            'label': '[COLOR yellow]下一页…[/COLOR]',
+            'path': plugin.url_for('artist_albums', artist=artist, offset=str(offset + _FACET_PAGE_SIZE)),
+        })
+
+    return items
+
+
+def _aggregate_artist_albums(api, artist):
+    """拉取某歌手的全部歌曲并按专辑名本地聚合。
+    :return: ([(album_name, song_count, cover_url), ...] 按歌曲数降序, 歌曲总数)
+    """
+    albums = {}  # album_name -> {'count': int, 'cover_url': str}
+    order = []
+    offset = 0
+    batch = 200
+    total_songs = 0
+    while True:
+        resp = api.get_songs(limit=batch, offset=offset, artist=artist)
+        songs = resp.get('songs', [])
+        total_songs = resp.get('total', 0)
+        for song in songs:
+            album_name = song.get('album') or ''
+            if album_name not in albums:
+                albums[album_name] = {'count': 0, 'cover_url': song.get('cover_url') or ''}
+                order.append(album_name)
+            albums[album_name]['count'] += 1
+            if not albums[album_name]['cover_url']:
+                albums[album_name]['cover_url'] = song.get('cover_url') or ''
+        offset += len(songs)
+        if offset >= total_songs or not songs:
+            break
+
+    result = [(name, albums[name]['count'], albums[name]['cover_url']) for name in order]
+    result.sort(key=lambda x: x[1], reverse=True)
+    return result, total_songs
+
+
+@plugin.route('/artists/<artist>/albums/<album>/songs/<offset>/')
+def artist_album_songs(artist, album, offset):
+    """某歌手 + 某专辑下的歌曲列表"""
+    if not _ensure_logged_in():
+        return []
+
+    decoded_artist = _facet_value_from_path(artist)
+    decoded_album = _facet_value_from_path(album)
+    api = _make_api()
+    page_size = _get_page_size()
+    offset = int(offset)
+    base_url = _get_base_url()
+    token = _get_active_token()
+
+    try:
+        resp = api.get_songs(limit=page_size, offset=offset, artist=decoded_artist, album=decoded_album)
+    except SongloftException as e:
+        _notify_error('加载失败', e.message)
+        return []
+
+    songs = resp.get('songs', [])
+    total = resp.get('total', 0)
+    # 同一歌手 + 同一专辑下歌手必然一致，标题不再重复拼歌手前缀
+    items = [_song_to_item(s, base_url, token, show_artist_prefix=False) for s in songs]
+
+    if offset == 0 and total > 0:
+        items.insert(0, {
+            'label': '[COLOR green]▶ 播放全部 ({} 首)[/COLOR]'.format(total),
+            'path': plugin.url_for(
+                'play_all_artist_album', artist=artist, album=album),
+        })
+
+    if offset + len(songs) < total:
+        items.append({
+            'label': '[COLOR yellow]下一页 ({}/{})…[/COLOR]'.format(offset + len(songs), total),
+            'path': plugin.url_for(
+                'artist_album_songs', artist=artist, album=album,
+                offset=str(offset + page_size)),
+        })
+
+    return items
+
+
+@plugin.route('/play_all/facet/<field>/<value>/')
+def play_all_facet(field, value):
+    """播放某分类取值下的全部歌曲（歌手/专辑/流派/年份，跨分页拉取全部）"""
+    if not _ensure_logged_in():
+        return
+    decoded_value = _facet_value_from_path(value)
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    _play_all(api, base_url, token, song_filter={field: decoded_value},
+              label=_facet_field_label(field))
+
+
+@plugin.route('/play_all/artist_album/<artist>/<album>/')
+def play_all_artist_album(artist, album):
+    """播放某歌手 + 某专辑下的全部歌曲"""
+    if not _ensure_logged_in():
+        return
+    decoded_artist = _facet_value_from_path(artist)
+    decoded_album = _facet_value_from_path(album)
+    api = _make_api()
+    base_url = _get_base_url()
+    token = _get_active_token()
+    _play_all(api, base_url, token,
+              song_filter={'artist': decoded_artist, 'album': decoded_album},
+              label='专辑')
+
+
+# ------------------------------------------------------------------ #
 # 歌单管理：移除歌曲 / 添加歌曲到歌单
 # ------------------------------------------------------------------ #
 
@@ -793,10 +1143,10 @@ def song_add_to_playlist(song_id):
 # 播放全部（跨分页）
 # ------------------------------------------------------------------ #
 
-def _play_all(api, base_url, token, playlist_id=None, label='歌曲库'):
+def _play_all(api, base_url, token, playlist_id=None, label='歌曲库', song_filter=None):
     """拉取全部歌曲并加入 Kodi 音乐播放列表后开始播放"""
     _notify('加载中', '正在加载全部歌曲，请稍候…')
-    items = _fetch_all_songs(api, base_url, token, playlist_id=playlist_id)
+    items = _fetch_all_songs(api, base_url, token, playlist_id=playlist_id, song_filter=song_filter)
     if not items:
         _notify_error('播放全部', '未能加载到任何歌曲')
         return

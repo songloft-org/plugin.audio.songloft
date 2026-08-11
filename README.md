@@ -5,6 +5,7 @@ Kodi 插件，用于播放 [Songloft](https://github.com/altman08/songloft-playe
 ## 功能
 
 - 歌曲库浏览与分页
+- **分类浏览**：按歌手 / 专辑 / 流派 / 年份浏览曲库（依赖后端 `/api/v1/songs/facets` 接口），歌手支持下钻到该歌手的专辑再到歌曲；各分类均支持「播放全部」
 - 歌单列表与歌单内歌曲浏览
 - 歌曲搜索
 - 本地文件流式播放（通过后端代理）
@@ -15,6 +16,7 @@ Kodi 插件，用于播放 [Songloft](https://github.com/altman08/songloft-playe
 ## 已知限制
 
 - **不支持 Songloft JS 插件**：Songloft 的 JS 插件系统（jsplugin）本质上是运行在 WebView/浏览器中的前端网页应用，Kodi 没有内置浏览器，也无法在插件环境中执行 JavaScript，因此无法渲染或交互。此 Kodi 插件仅对接 Songloft 后端的原生 REST API（歌曲库、歌单、搜索、播放），不支持通过 JS 插件扩展的内容来源。
+- **分类浏览依赖新版后端**：主菜单的「歌手/专辑/流派/年份」依赖 Songloft 服务端提供的 `/api/v1/songs/facets` 聚合接口和 `/api/v1/songs` 的 `genre`/`artist`/`album`/`year` 过滤参数。若服务端版本过旧、未实现该接口，这几个分类入口会加载失败（其余功能不受影响）。
 
 ## 安装
 
