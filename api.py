@@ -11,12 +11,15 @@ API_PREFIX = '/api/v1'
 
 
 class SongloftApi(object):
-    def __init__(self, base_url, access_token=None):
+    def __init__(self, base_url, access_token=None, on_unauthorized=None):
         """
         :param base_url: Songloft 服务器地址，例如 http://192.168.1.100:58091
         :param access_token: JWT access token（登录后获取）
+        :param on_unauthorized: 可选回调。业务请求收到 401 时调用，回调应返回
+                                新的 access_token；返回空值表示无法重新登录。
         """
         self.base_url = base_url.rstrip('/')
+        self.on_unauthorized = on_unauthorized
         self.session = requests.Session()
         self.session.headers.update({
             'Content-Type': 'application/json',
@@ -37,7 +40,20 @@ class SongloftApi(object):
     def _url(self, path):
         return self.base_url + API_PREFIX + path
 
-    def _get(self, path, params=None):
+    def _reauthenticate(self):
+        """调用上层提供的重新登录回调，并将返回的新 token 写入当前 session。"""
+        if not self.on_unauthorized:
+            return False
+        try:
+            access_token = self.on_unauthorized()
+        except Exception:
+            return False
+        if not access_token:
+            return False
+        self.set_token(access_token)
+        return True
+
+    def _get(self, path, params=None, retry_on_unauthorized=True):
         try:
             resp = self.session.get(self._url(path), params=params, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
@@ -47,18 +63,22 @@ class SongloftApi(object):
         except requests.exceptions.Timeout:
             raise SongloftException('连接超时，请检查网络')
         except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else 0
+            status = e.response.status_code if e.response is not None else 0
             if status == 401:
-                raise SongloftException('认证失败，请重新登录')
+                if retry_on_unauthorized and self._reauthenticate():
+                    return self._get(path, params=params, retry_on_unauthorized=False)
+                raise SongloftException('认证失败，请重新登录', status_code=401)
             elif status == 403:
-                raise SongloftException('权限不足')
+                raise SongloftException('权限不足', status_code=403)
             elif status == 404:
-                raise SongloftException('资源不存在')
-            raise SongloftException('请求失败：HTTP {}'.format(status))
+                raise SongloftException('资源不存在', status_code=404)
+            raise SongloftException('请求失败：HTTP {}'.format(status), status_code=status)
+        except SongloftException:
+            raise
         except Exception as e:
             raise SongloftException('请求异常：{}'.format(str(e)))
 
-    def _post(self, path, data=None):
+    def _post(self, path, data=None, retry_on_unauthorized=True):
         try:
             resp = self.session.post(self._url(path), json=data, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
@@ -68,14 +88,18 @@ class SongloftApi(object):
         except requests.exceptions.Timeout:
             raise SongloftException('连接超时，请检查网络')
         except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else 0
+            status = e.response.status_code if e.response is not None else 0
             if status == 401:
-                raise SongloftException('用户名或密码错误')
-            raise SongloftException('请求失败：HTTP {}'.format(status))
+                if retry_on_unauthorized and self._reauthenticate():
+                    return self._post(path, data=data, retry_on_unauthorized=False)
+                raise SongloftException('用户名或密码错误', status_code=401)
+            raise SongloftException('请求失败：HTTP {}'.format(status), status_code=status)
+        except SongloftException:
+            raise
         except Exception as e:
             raise SongloftException('请求异常：{}'.format(str(e)))
 
-    def _put(self, path, data=None):
+    def _put(self, path, data=None, retry_on_unauthorized=True):
         try:
             resp = self.session.put(self._url(path), json=data, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
@@ -85,18 +109,22 @@ class SongloftApi(object):
         except requests.exceptions.Timeout:
             raise SongloftException('连接超时，请检查网络')
         except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else 0
+            status = e.response.status_code if e.response is not None else 0
             if status == 401:
-                raise SongloftException('认证失败，请重新登录')
+                if retry_on_unauthorized and self._reauthenticate():
+                    return self._put(path, data=data, retry_on_unauthorized=False)
+                raise SongloftException('认证失败，请重新登录', status_code=401)
             elif status == 403:
-                raise SongloftException('权限不足')
+                raise SongloftException('权限不足', status_code=403)
             elif status == 404:
-                raise SongloftException('资源不存在')
-            raise SongloftException('请求失败：HTTP {}'.format(status))
+                raise SongloftException('资源不存在', status_code=404)
+            raise SongloftException('请求失败：HTTP {}'.format(status), status_code=status)
+        except SongloftException:
+            raise
         except Exception as e:
             raise SongloftException('请求异常：{}'.format(str(e)))
 
-    def _delete(self, path, data=None):
+    def _delete(self, path, data=None, retry_on_unauthorized=True):
         try:
             resp = self.session.delete(self._url(path), json=data, timeout=DEFAULT_TIMEOUT)
             resp.raise_for_status()
@@ -109,14 +137,18 @@ class SongloftApi(object):
         except requests.exceptions.Timeout:
             raise SongloftException('连接超时，请检查网络')
         except requests.exceptions.HTTPError as e:
-            status = e.response.status_code if e.response else 0
+            status = e.response.status_code if e.response is not None else 0
             if status == 401:
-                raise SongloftException('认证失败，请重新登录')
+                if retry_on_unauthorized and self._reauthenticate():
+                    return self._delete(path, data=data, retry_on_unauthorized=False)
+                raise SongloftException('认证失败，请重新登录', status_code=401)
             elif status == 403:
-                raise SongloftException('权限不足')
+                raise SongloftException('权限不足', status_code=403)
             elif status == 404:
-                raise SongloftException('资源不存在')
-            raise SongloftException('请求失败：HTTP {}'.format(status))
+                raise SongloftException('资源不存在', status_code=404)
+            raise SongloftException('请求失败：HTTP {}'.format(status), status_code=status)
+        except SongloftException:
+            raise
         except Exception as e:
             raise SongloftException('请求异常：{}'.format(str(e)))
 
@@ -314,6 +346,7 @@ class SongloftApi(object):
 
 
 class SongloftException(Exception):
-    def __init__(self, message):
+    def __init__(self, message, status_code=None):
         self.message = message
+        self.status_code = status_code
         super(SongloftException, self).__init__(message)

@@ -123,7 +123,22 @@ def _make_api(idx=None):
     if idx is None:
         idx = _active_idx()
     token = _get_server_storage(idx).get('access_token', '')
-    return SongloftApi(_get_base_url(idx), access_token=token)
+    return SongloftApi(
+        _get_base_url(idx),
+        access_token=token,
+        on_unauthorized=lambda: _auto_relogin(idx),
+    )
+
+
+def _auto_relogin(idx):
+    """缓存 token 被服务端以 401 拒绝时，重新登录并返回新 token。
+
+    SongloftApi 只会在同一个业务请求中调用本函数一次；拿到新 token 后只重试
+    原请求一次，第二次仍失败会直接向调用方返回错误，不会形成重试循环。
+    """
+    if not _do_login(idx):
+        return ''
+    return _get_server_storage(idx).get('access_token', '')
 
 
 # ------------------------------------------------------------------ #
@@ -164,6 +179,7 @@ def _do_login(idx):
         _notify_error('登录失败', '服务器 {} 未配置用户名/密码，请检查设置'.format(idx + 1))
         return False
 
+    # 登录请求不传 on_unauthorized 回调，避免登录本身 401 时递归重试登录。
     api = SongloftApi(base_url)
     try:
         tokens = api.login(username, password)
@@ -190,12 +206,16 @@ def _do_login(idx):
 
 def _build_url_with_token(url, base_url, token):
     """构建带 access_token 查询参数的完整 URL。
-    后端通过 ?access_token=<token> 鉴权（不支持 Authorization Header）。
+
+    业务请求可能因 401 自动重新登录并刷新存储中的 token；列表路由在请求
+    前保存的 token 参数此时已过期。因此构建媒体/封面 URL 时以当前活跃
+    服务器存储中的 token 为准，确保同一次页面加载也使用新认证。
     """
     if not url:
         return ''
     if url.startswith('/'):
         url = base_url + url
+    token = _get_active_token() or token
     if token:
         sep = '&' if '?' in url else '?'
         url = '{}{}access_token={}'.format(url, sep, token)
